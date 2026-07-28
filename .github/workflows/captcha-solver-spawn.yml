@@ -23,9 +23,9 @@ on:
         required: false
         default: "true"
       BROWSER_HEADLESS:
-        description: "1 = headless browser on runner (recommended for GHA)"
+        description: "0 = headed (recommended for real solves); 1 = headless"
         required: false
-        default: "1"
+        default: "0"
   schedule:
     - cron: "0 */4 * * *"
 
@@ -66,7 +66,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install --no-user -r requirements.txt
           python -m playwright install chromium
-          python scripts/download_arkose_models.py --one conveyor.onnx
+          if (-not (Test-Path common/mistral.json)) { Copy-Item common/mistral.json.example common/mistral.json }
+          if (-not (Test-Path common/apikey.txt)) { Copy-Item common/apikey.example.txt common/apikey.txt }
+
+      - name: Download Arkose ONNX models (~1.4GB)
+        shell: pwsh
+        run: |
+          python scripts/download_arkose_models.py
+          $count = (Get-ChildItem arkose/models/*.onnx).Count
+          Write-Host "Arkose models on disk: $count"
+          if ($count -lt 20) { throw "Expected at least 20 ONNX models, got $count" }
 
       - name: Download ngrok
         shell: pwsh
@@ -90,7 +99,7 @@ jobs:
         env:
           INPUT_PORT: ${{ github.event.inputs.PORT || '8877' }}
           PUBLISH_GIT: ${{ github.event.inputs.PUBLISH_GIT || 'true' }}
-          BROWSER_HEADLESS: ${{ github.event.inputs.BROWSER_HEADLESS || '1' }}
+          BROWSER_HEADLESS: ${{ github.event.inputs.BROWSER_HEADLESS || '0' }}
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
           NGROK_DOMAIN: ${{ secrets.NGROK_DOMAIN }}
           PYTHONIOENCODING: utf-8

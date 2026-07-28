@@ -14,15 +14,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 MODELS_DIR = ROOT / "arkose" / "models"
 BASE = "https://huggingface.co/haloworker/td-captcha-model-v1/resolve/main/funcaptcha_model"
+UA = "Mozilla/5.0 (compatible; captcha-solver/1.0)"
 
-# Keep in sync with arkose/predict.py _VARIANT_MODELS values
+# Files present on HuggingFace (sync with arkose/predict.py _VARIANT_MODELS values)
 MODEL_FILES = sorted({
     "conveyor.onnx",
     "coordinatesmatch.onnx",
     "coordinatesmatch_cv.onnx",
     "3d_rollball_objects_v2.onnx",
     "3d_rollball_objects_cv.onnx",
-    "threed_rollball_animal.onnx",
+    "penguin.onnx",
     "hopscotch_highsec.onnx",
     "train_coordinates.onnx",
     "train_coordinates_cv.onnx",
@@ -53,7 +54,13 @@ def download(name: str) -> None:
     print(f"[get]  {name} ...")
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
-    urllib.request.urlretrieve(url, tmp)
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=600) as resp, open(tmp, "wb") as out:
+        while True:
+            chunk = resp.read(1024 * 1024)
+            if not chunk:
+                break
+            out.write(chunk)
     tmp.replace(dest)
     print(f"[ok]   {name} ({dest.stat().st_size // (1024 * 1024)} MB)")
 
@@ -63,13 +70,18 @@ def main() -> int:
     p.add_argument("--one", help="Download a single model file (e.g. conveyor.onnx)")
     args = p.parse_args()
     targets = [args.one] if args.one else MODEL_FILES
+    failed = []
     for name in targets:
         try:
             download(name)
         except Exception as e:
             print(f"[fail] {name}: {e}", file=sys.stderr)
-            return 1
-    print("Done.")
+            failed.append(name)
+    if failed:
+        print(f"Failed: {failed}", file=sys.stderr)
+        return 1
+    count = len(list(MODELS_DIR.glob("*.onnx")))
+    print(f"Done. {count} model(s) in {MODELS_DIR}")
     return 0
 
 

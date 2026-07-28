@@ -29,7 +29,8 @@ _MODELS_DIR = Path(__file__).parent / "models"
 _VARIANT_MODELS = {
     "conveyor": "conveyor.onnx",
     "coordinatesmatch": "coordinatesmatch.onnx",
-    "3d_rollball_animals": "threed_rollball_animal.onnx",
+    "3d_rollball_animals": "penguin.onnx",
+    "penguin": "penguin.onnx",
     "3d_rollball_objects": "3d_rollball_objects_v2.onnx",
     "hopscotch_highsec": "hopscotch_highsec.onnx",
     "train_coordinates": "train_coordinates.onnx",
