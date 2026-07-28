@@ -262,6 +262,8 @@ class SolveRequest(BaseModel):
     # arkose-only (Arkose FunCaptcha)
     public_key: Optional[str] = Field(None, description="arkose: Arkose public key from the target site's embed. Required for type=arkose.")
     game_type: Optional[str] = Field("4", description="arkose: Arkose game type (default '4').")
+    surl: Optional[str] = Field(None, description="arkose: Arkose service URL override (auto-detected from gfct).")
+    max_waves: Optional[int] = Field(10, description="arkose: max challenge waves before giving up (default 10).")
 
 
 # Named request examples → Swagger UI renders these as a dropdown picker on /solve.
@@ -644,9 +646,13 @@ async def _dispatch(req: SolveRequest) -> dict:
         from arkose.solve import solve_arkose
         actions, _ = _extract(req)
         r = await solve_arkose(
-            public_key=req.public_key or "", page_url=req.url,
-            game_type=req.game_type or "4", proxy=req.proxy,
-            timeout_s=req.timeout_s or 120, pre_actions=actions)
+            public_key=req.public_key or "",
+            page_url=req.page_url or req.url,
+            game_type=req.game_type or "4",
+            proxy=req.proxy,
+            timeout_s=req.timeout_s or 120,
+            max_attempts=req.max_waves or 10,
+            pre_actions=actions)
         return {"type": "arkose", **r}
 
     # reCAPTCHA
@@ -746,6 +752,8 @@ async def solve(req: SolveRequest = Body(..., openapi_examples=_SOLVE_EXAMPLES))
         raise HTTPException(400, "scene_id and prefix are required for type=aliyun")
     if req.type == "arkose" and not req.public_key:
         raise HTTPException(400, "public_key is required for type=arkose")
+    if req.type == "arkose" and not (req.page_url or req.url):
+        raise HTTPException(400, "page_url is required for type=arkose")
     if req.type not in _PAGE_LEVEL and req.type not in ("aliyun", "arkose") and not req.sitekey:
         raise HTTPException(400, f"sitekey is required for type={req.type}")
     _validate_urls(req)

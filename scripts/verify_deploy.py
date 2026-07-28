@@ -39,6 +39,7 @@ def check_files() -> list[str]:
         "common/browser.py",
         "turnstile/solve.py",
         "recaptcha/solve.py",
+        "arkose/solve.py",
         "github_signup/harvest.py",
     ]
     optional = [
