@@ -1,7 +1,7 @@
 # Captcha Solver — temporary public tunnel via ngrok on GitHub Actions (Windows)
 #
 # HARD LIMIT: public GH Actions jobs max ~6 hours (timeout-minutes: 350).
-# Schedule re-fires every 4h so a fresh tunnel is available before the hard kill.
+# Auto-spawn schedule is DISABLED — start manually via Actions → "Captcha Solver Spawner".
 #
 # Repo secret (Settings → Secrets → Actions):
 #   NGROK_AUTHTOKEN  required — https://dashboard.ngrok.com/get-started/your-authtoken
@@ -26,8 +26,7 @@ on:
         description: "0 = headed (recommended for real solves); 1 = headless"
         required: false
         default: "0"
-  schedule:
-    - cron: "0 */4 * * *"
+  # Auto-spawn disabled — was: cron "0 */4 * * *" (every 4h)
 
 concurrency:
   group: captcha-solver-spawn

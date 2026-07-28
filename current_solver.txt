@@ -1,1 +1,1 @@
-https://moonbeam-worry-backboned.ngrok-free.dev
+# disabled — no active tunnel (auto-spawn schedule removed)
