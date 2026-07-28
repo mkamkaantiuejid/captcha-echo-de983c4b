@@ -35,6 +35,13 @@ _solve_lock = asyncio.Lock()
 _DD_ENDPOINT = "api-js.datadome.co/js/"
 
 
+def _is_datadome_js_post(url: str, method: str) -> bool:
+    """Match default and site-specific DataDome JS endpoints (e.g. datadome.garena.com/js/)."""
+    if method != "POST" or "/js/" not in url:
+        return False
+    return "datadome.co" in url or ".datadome." in url or url.startswith("https://datadome.")
+
+
 def _kwargs(proxy: str = None) -> dict:
     return browser_kwargs("TURNSTILE", proxy=proxy)
 
@@ -81,7 +88,7 @@ async def solve_datadome(url: str = None, referer: str = None,
             page = await ctx.new_page()
 
             async def on_response(resp):
-                if _DD_ENDPOINT in resp.url and resp.request.method == "POST":
+                if _is_datadome_js_post(resp.url, resp.request.method):
                     try:
                         body = await resp.text()
                         captured["raw_json"] = body[:500]
