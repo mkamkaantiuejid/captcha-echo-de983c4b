@@ -1,0 +1,8 @@
+# Mistral API keys for reCAPTCHA/hCaptcha image challenges (one per line).
+# Copy this file to apikey.txt and add your keys:
+#   copy apikey.example.txt apikey.txt
+#
+# Vision models: common/mistral.json (or dashboard → Global Setup)
+#
+# Not required for: Turnstile, reCAPTCHA v3/invisible (no image challenge),
+# Cloudflare, AWS WAF, BotGuard, DataDome, PerimeterX, Akamai (unless VLM gap).

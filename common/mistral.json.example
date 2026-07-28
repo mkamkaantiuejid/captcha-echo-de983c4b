@@ -1,0 +1,5 @@
+{
+  "recaptcha_model": "mistral-medium-latest",
+  "hcaptcha_model": "mistral-medium-latest",
+  "aliyun_model": "mistral-medium-latest"
+}

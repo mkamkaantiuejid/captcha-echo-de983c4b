@@ -1,0 +1,249 @@
+# Captcha Solver — temporary public tunnel via ngrok on GitHub Actions (Windows)
+#
+# HARD LIMIT: public GH Actions jobs max ~6 hours (timeout-minutes: 350).
+# Schedule re-fires every 4h so a fresh tunnel is available before the hard kill.
+#
+# Repo secret (Settings → Secrets → Actions):
+#   NGROK_AUTHTOKEN  required — https://dashboard.ngrok.com/get-started/your-authtoken
+#   NGROK_DOMAIN     optional — static domain e.g. xyz.ngrok-free.app (no https://)
+#
+# Discovery: raw.githubusercontent.com/<user>/<repo>/main/current_solver.txt
+
+name: "Captcha Solver Spawner"
+
+on:
+  workflow_dispatch:
+    inputs:
+      PORT:
+        description: "Solver HTTP port"
+        required: false
+        default: "8877"
+      PUBLISH_GIT:
+        description: "Commit current_solver.txt (true/false)"
+        required: false
+        default: "true"
+      BROWSER_HEADLESS:
+        description: "1 = headless browser on runner (recommended for GHA)"
+        required: false
+        default: "1"
+  schedule:
+    - cron: "0 */4 * * *"
+
+concurrency:
+  group: captcha-solver-spawn
+  cancel-in-progress: true
+
+jobs:
+  solver:
+    runs-on: windows-latest
+    timeout-minutes: 350
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Require ngrok auth
+        shell: pwsh
+        env:
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+        run: |
+          if (-not $env:NGROK_AUTHTOKEN) {
+            throw "Missing secret NGROK_AUTHTOKEN"
+          }
+          Write-Host "NGROK_AUTHTOKEN is set (masked)"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install solver dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m playwright install chromium
+
+      - name: Download ngrok
+        shell: pwsh
+        run: |
+          $zip = "ngrok.zip"
+          $url = "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip"
+          for ($i = 1; $i -le 3; $i++) {
+            try {
+              Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+              Expand-Archive -Path $zip -DestinationPath . -Force
+              if (-not (Test-Path ".\ngrok.exe")) { throw "ngrok.exe missing" }
+              break
+            } catch {
+              if ($i -eq 3) { throw $_ }
+              Start-Sleep 5
+            }
+          }
+
+      - name: Run solver + ngrok tunnel
+        shell: pwsh
+        env:
+          INPUT_PORT: ${{ github.event.inputs.PORT || '8877' }}
+          PUBLISH_GIT: ${{ github.event.inputs.PUBLISH_GIT || 'true' }}
+          BROWSER_HEADLESS: ${{ github.event.inputs.BROWSER_HEADLESS || '1' }}
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+          NGROK_DOMAIN: ${{ secrets.NGROK_DOMAIN }}
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: "1"
+        run: |
+          $PORT = if ($env:INPUT_PORT) { [int]$env:INPUT_PORT } else { 8877 }
+          $restarts = 0
+          $solverProc = $null
+          $lastPublished = ""
+
+          if ($env:NGROK_AUTHTOKEN) {
+            Write-Host "::add-mask::$($env:NGROK_AUTHTOKEN)"
+          }
+
+          function Start-Solver {
+            Write-Host "Starting server.py on port $PORT (BROWSER_HEADLESS=$env:BROWSER_HEADLESS)"
+            $env:PORT = "$PORT"
+            return (Start-Process python -ArgumentList "server.py" -PassThru -NoNewWindow `
+              -RedirectStandardOutput solver.log -RedirectStandardError solver_err.log)
+          }
+
+          function Get-NgrokPublicUrl {
+            try {
+              $api = Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels" -TimeoutSec 3
+              foreach ($t in @($api.tunnels)) {
+                if ($t.public_url -match '^https://') { return $t.public_url.TrimEnd('/') }
+              }
+              foreach ($t in @($api.tunnels)) {
+                if ($t.public_url) { return ($t.public_url -replace '^http://','https://').TrimEnd('/') }
+              }
+            } catch {}
+            return $null
+          }
+
+          function Start-Tunnel {
+            $logFile = "tunnel_$(Get-Date -Format 'HHmmss').log"
+            $args = @("http", "$PORT", "--log=stdout", "--log-format=logfmt")
+            $domain = ($env:NGROK_DOMAIN -as [string]).Trim()
+            if ($domain) {
+              $domain = $domain -replace '^https?://','' -replace '/$',''
+              $args += @("--domain", $domain)
+              Write-Host "ngrok domain: $domain"
+            }
+            $proc = Start-Process ".\ngrok.exe" -ArgumentList $args -RedirectStandardOutput $logFile `
+              -RedirectStandardError "${logFile}.err" -PassThru -NoNewWindow
+            $url = $null
+            for ($w = 0; $w -lt 60 -and -not $url; $w++) {
+              Start-Sleep 1
+              if ($proc.HasExited) {
+                Write-Host "ngrok exited code=$($proc.ExitCode)"
+                Get-Content $logFile -ErrorAction SilentlyContinue | Select-Object -Last 20 | ForEach-Object { Write-Host "  [ngrok] $_" }
+                break
+              }
+              $url = Get-NgrokPublicUrl
+              if (-not $url) {
+                $c = Get-Content $logFile -Raw -ErrorAction SilentlyContinue
+                if ($c -match 'https://[a-zA-Z0-9\-]+\.ngrok(?:-free)?\.(?:app|dev|io)') {
+                  $url = $Matches[0]
+                }
+              }
+            }
+            return @{ proc = $proc; url = $url; log = $logFile }
+          }
+
+          function Wait-Health {
+            for ($i = 0; $i -lt 45; $i++) {
+              try {
+                $h = Invoke-RestMethod -Uri "http://127.0.0.1:$PORT/health" -TimeoutSec 2
+                if ($h.status -eq "ok") { return $true }
+              } catch {}
+              Start-Sleep 2
+            }
+            return $false
+          }
+
+          function Publish-Urls([string]$tunnelBase) {
+            if (-not $tunnelBase) { return }
+            $base = $tunnelBase.TrimEnd('/')
+            $solve = "$base/solve"
+            if ($solve -eq $script:lastPublished) {
+              Write-Host "URL unchanged, skip publish"
+              return
+            }
+            $script:lastPublished = $solve
+            Write-Host "======================================================"
+            Write-Host "TUNNEL URL   : $base"
+            Write-Host "SOLVE        : $solve"
+            Write-Host "DASHBOARD    : $base/dashboard"
+            Write-Host "HEALTH       : $base/health"
+            Write-Host "DISCOVERY    : $base"
+            Write-Host "======================================================"
+            Write-Host "::notice title=Captcha solver::$solve"
+
+            if ($env:PUBLISH_GIT -ne "false") {
+              try {
+                $base | Out-File -Encoding ascii -FilePath current_solver.txt -NoNewline
+                git config user.name "captcha-solver-bot"
+                git config user.email "captcha-solver-bot@users.noreply.github.com"
+                git add current_solver.txt
+                git diff --cached --quiet
+                if ($LASTEXITCODE -ne 0) {
+                  git commit -m "chore: tunnel url $(Get-Date -Format o)"
+                  git push origin HEAD:main 2>&1 | ForEach-Object { Write-Host $_ }
+                  Write-Host "Published current_solver.txt"
+                }
+              } catch {
+                Write-Host "WARN git publish failed: $_"
+              }
+            }
+          }
+
+          $solverProc = Start-Solver
+          if (-not (Wait-Health)) {
+            Write-Host "WARN: /health not ready — check solver.log"
+            Get-Content solver.log -Tail 30 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  [solver] $_" }
+            Get-Content solver_err.log -Tail 30 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  [solver.err] $_" }
+          } else {
+            Write-Host "Solver healthy on :$PORT"
+          }
+
+          while ($true) {
+            Write-Host "Starting tunnel (restart #$restarts)..."
+            if ($solverProc.HasExited) {
+              Write-Host "solver dead — restart"
+              $solverProc = Start-Solver
+              Wait-Health | Out-Null
+            }
+
+            $tunnel = Start-Tunnel
+            if (-not $tunnel.url) {
+              Write-Host "WARN: no public URL — check ngrok token/limits"
+            }
+            Publish-Urls $tunnel.url
+
+            while (-not $tunnel.proc.HasExited) {
+              Start-Sleep 15
+              $ts = Get-Date -Format "HH:mm:ss"
+              Write-Host "$ts | tunnel=$(-not $tunnel.proc.HasExited) | solver=$(-not $solverProc.HasExited)"
+
+              if ($solverProc.HasExited) {
+                try { Stop-Process -Id $tunnel.proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+                $solverProc = Start-Solver
+                Wait-Health | Out-Null
+                break
+              }
+              if (-not $tunnel.url) {
+                $late = Get-NgrokPublicUrl
+                if ($late) {
+                  $tunnel.url = $late
+                  Publish-Urls $late
+                }
+              }
+            }
+            $restarts++
+            Write-Host "Tunnel exited — restart in 5s (#$restarts)"
+            Start-Sleep 5
+          }

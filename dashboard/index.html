@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Captcha Solver Dashboard</title>
+  <link rel="stylesheet" href="/dashboard/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>Captcha Solver <span>local sidecar</span></h1>
+    <div class="header-actions">
+      <span id="health-badge" class="badge"><span class="dot"></span> checking…</span>
+      <a href="/docs" class="btn" target="_blank">Swagger API</a>
+      <a href="/redoc" class="btn" target="_blank">ReDoc</a>
+    </div>
+  </header>
+
+  <div class="mobile-nav">
+    <select id="mobile-nav-select" aria-label="Navigate">
+      <option value="overview">Overview</option>
+      <option value="test">Test Solve</option>
+      <option value="setup">Global Setup</option>
+    </select>
+  </div>
+
+  <div class="layout">
+    <nav class="sidebar" id="sidebar">
+      <h2>Monitor</h2>
+      <button data-panel="overview" class="active">📊 Overview</button>
+      <button data-panel="test">🧪 Test Solve</button>
+      <button data-panel="setup">⚙️ Global Setup</button>
+
+      <h2>Solver Tutorials</h2>
+      <div id="solver-nav"></div>
+    </nav>
+
+    <main>
+      <!-- Overview -->
+      <section id="panel-overview" class="panel active">
+        <h2>Overview</h2>
+        <p class="subtitle">Live status from <code>GET /health</code>, <code>/status</code>, and <code>/logs</code></p>
+
+        <div class="grid-2">
+          <div class="card">
+            <h3>Supported Types</h3>
+            <div class="stat-value" id="stat-types">—</div>
+            <div class="stat-label">solver backends online</div>
+          </div>
+          <div class="card">
+            <h3>Running Tasks</h3>
+            <div class="stat-value" id="stat-running">—</div>
+            <div class="stat-label">in-flight solves</div>
+          </div>
+          <div class="card">
+            <h3>Browser Mode</h3>
+            <div class="stat-value" id="browser-mode">—</div>
+            <div class="stat-label">BROWSER_HEADLESS=0 → headed (recommended)</div>
+          </div>
+          <div class="card">
+            <h3>Recent Events</h3>
+            <div class="stat-value" id="stat-logs">—</div>
+            <div class="stat-label">buffered log entries</div>
+          </div>
+        </div>
+
+        <div class="card section">
+          <h3>Current Tasks</h3>
+          <div id="current-tasks"><p class="empty">No tasks running</p></div>
+        </div>
+
+        <div class="card section">
+          <h3>Recent Solve Log</h3>
+          <div id="logs-table"><p class="empty">Loading logs…</p></div>
+        </div>
+      </section>
+
+      <!-- Test Solve -->
+      <section id="panel-test" class="panel">
+        <h2>Test Solve</h2>
+        <p class="subtitle">Send a <code>POST /solve</code> request. Browser runs in <strong>headed</strong> mode by default (<code>BROWSER_HEADLESS=0</code>) — you should see a Chromium window. Solves can take 15–60+ seconds.</p>
+
+        <div class="card">
+          <div class="form-group">
+            <label for="bearer-token">Bearer Token (optional — for remote / proxied deployments)</label>
+            <input type="password" id="bearer-token" placeholder="Stored in localStorage" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label for="solver-preset">Load example from solver</label>
+            <select id="solver-preset"><option value="">— select solver —</option></select>
+          </div>
+          <div class="form-group">
+            <label for="solve-payload">Request JSON</label>
+            <textarea id="solve-payload" spellcheck="false">{
+  "type": "recaptcha",
+  "version": "v3",
+  "sitekey": "6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI",
+  "url": "https://www.google.com/recaptcha/api2/demo",
+  "action": "homepage",
+  "timeout_s": 60
+}</textarea>
+          </div>
+          <div class="btn-row">
+            <button class="btn primary" id="btn-solve">Run Solve</button>
+            <button class="btn" id="btn-format">Format JSON</button>
+          </div>
+          <div id="solve-result"></div>
+        </div>
+      </section>
+
+      <!-- Global Setup -->
+      <section id="panel-setup" class="panel">
+        <h2>Global Setup</h2>
+        <p class="subtitle">File-based config (no .env required). Optional env overrides for PORT, GEOIP, etc.</p>
+        <div id="global-setup"></div>
+      </section>
+
+      <!-- Per-solver tutorials (generated) -->
+      <div id="solver-panels"></div>
+    </main>
+  </div>
+
+  <script src="/dashboard/static/app.js"></script>
+</body>
+</html>

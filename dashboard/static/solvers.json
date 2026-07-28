@@ -1,0 +1,434 @@
+{
+  "global": {
+    "endpoint": "POST /solve",
+    "responseRule": "2xx → read solved; non-2xx → read detail. Never both.",
+    "envVars": [
+      {"name": "PORT", "default": "8877", "description": "HTTP listen port"},
+      {"name": "BROWSER_HEADLESS", "default": "0 (service)", "description": "0 = headed for all browser solvers (use Xvfb on servers)"},
+      {"name": "TURNSTILE_GEOIP", "default": "unset", "description": "1 = align tz/locale/WebGL to proxy IP (Turnstile, Cloudflare, AWS WAF)"},
+      {"name": "RECAPTCHA_GEOIP", "default": "unset", "description": "1 = geo alignment for reCAPTCHA browser"},
+      {"name": "SOLVER_ALLOW_PRIVATE", "default": "unset", "description": "1 = allow private/loopback URLs (SSRF guard off — dev only)"},
+      {"name": "SOLVER_PUBLIC_URL", "default": "https://solver.example.com", "description": "Public base URL in OpenAPI docs"}
+    ],
+    "mistralSetup": {
+      "title": "Mistral vision (reCAPTCHA, hCaptcha, Aliyun VLM)",
+      "steps": [
+        "Add Mistral API keys in the form below (one per line) or edit common/apikey.txt",
+        "Set vision models below (saved to common/mistral.json)",
+        "Default model: mistral-medium-latest (pixtral-12b aliases to a text-only model on this API)"
+      ],
+      "keyfile": "common/apikey.txt",
+      "configfile": "common/mistral.json",
+      "models": [
+        {"id": "recaptcha", "label": "reCAPTCHA image grids", "field": "recaptcha_model"},
+        {"id": "hcaptcha", "label": "hCaptcha image grids", "field": "hcaptcha_model"},
+        {"id": "aliyun", "label": "Aliyun VLM gap detection", "field": "aliyun_model"}
+      ]
+    }
+  },
+  "solvers": [
+    {
+      "id": "turnstile",
+      "name": "Cloudflare Turnstile",
+      "icon": "🛡️",
+      "summary": "Mint a Turnstile response token for any sitekey.",
+      "returns": "token, expires_in, method, elapsed",
+      "needsSitekey": true,
+      "needsUrl": true,
+      "modes": [
+        {"name": "Route intercept (default)", "description": "Fastest. Intercepts target URL, serves local widget page. Some sites reject stub tokens."},
+        {"name": "Route + verify", "description": "Solve then POST verify_url from same session. Use verify_payload with __TOKEN__ placeholder."},
+        {"name": "Real page", "description": "Set real_page: true. Navigate live site, run pre_actions, click checkbox, optional post_fetch."}
+      ],
+      "required": [
+        {"field": "type", "value": "turnstile"},
+        {"field": "sitekey", "value": "Widget sitekey from target page"},
+        {"field": "url", "value": "Page origin (intercept target)"}
+      ],
+      "optional": [
+        {"field": "action", "description": "Turnstile action name"},
+        {"field": "cdata", "description": "Customer data bound into token"},
+        {"field": "real_page", "description": "true = solve on live page"},
+        {"field": "verify_url / verify_payload / page_url", "description": "Solve-and-verify flow"},
+        {"field": "pre_actions", "description": "click | fill | wait | select | press before widget"},
+        {"field": "post_fetch", "description": "API calls after solve (__TOKEN__ injection)"},
+        {"field": "proxy", "description": "http://user:pass@host:port"},
+        {"field": "timeout_s", "description": "Deadline in seconds (default 60)"}
+      ],
+      "env": ["BROWSER_HEADLESS", "TURNSTILE_GEOIP"],
+      "example": {
+        "type": "turnstile",
+        "sitekey": "0x4AAAAAAA...",
+        "url": "https://target.com/login"
+      },
+      "tips": [
+        "If token is rejected (invalid-input-response), switch to real_page: true",
+        "Use residential proxy on hard targets",
+        "pre_actions support CSS, XPath (//), text=, regex=, role= selectors"
+      ]
+    },
+    {
+      "id": "recaptcha",
+      "name": "Google reCAPTCHA",
+      "icon": "🔐",
+      "summary": "v2 checkbox, v3 score, invisible, and Enterprise variants.",
+      "returns": "token, score (v3 with secret), method, elapsed",
+      "needsSitekey": true,
+      "needsUrl": true,
+      "modes": [
+        {"name": "v3 (default action: submit)", "description": "grecaptcha.execute() — no interaction, ~4s. Best for score keys."},
+        {"name": "invisible", "description": "Same as v3 for invisible sitekeys. Use real_page for hard origins."},
+        {"name": "v2 checkbox", "description": "Clicks checkbox; image grid solved via ONNX hybrid or Mistral."},
+        {"name": "Enterprise", "description": "Add enterprise: true — loads enterprise.js"}
+      ],
+      "required": [
+        {"field": "type", "value": "recaptcha"},
+        {"field": "sitekey", "value": "reCAPTCHA site key"},
+        {"field": "url", "value": "Target page URL"}
+      ],
+      "optional": [
+        {"field": "version", "description": "v2 | v3 | invisible (default v2)"},
+        {"field": "enterprise", "description": "true for Enterprise keys"},
+        {"field": "action", "description": "v3/invisible action name"},
+        {"field": "secret", "description": "Site secret to also return v3 score via siteverify"},
+        {"field": "classifier", "description": "auto | hybrid | yolo | mistral — tile classifier for image challenges"},
+        {"field": "real_page", "description": "Navigate live page (needed when enterprise.js 403s on stub)"},
+        {"field": "pre_actions / post_fetch", "description": "Real-page automation"},
+        {"field": "proxy", "description": "Per-request proxy"},
+        {"field": "timeout_s", "description": "Default 60"}
+      ],
+      "env": ["BROWSER_HEADLESS", "RECAPTCHA_GEOIP"],
+      "example": {
+        "type": "recaptcha",
+        "version": "v3",
+        "enterprise": true,
+        "sitekey": "6Lc...",
+        "url": "https://target.com",
+        "action": "login"
+      },
+      "tips": [
+        "v3 from residential IP can score 0.9 without proxy",
+        "classifier: hybrid uses local ONNX first, Mistral for unknown targets",
+        "Audio challenge path removed — use v3/invisible or image classifier",
+        "Place Mistral keys in common/apikey.txt for image challenges"
+      ]
+    },
+    {
+      "id": "hcaptcha",
+      "name": "hCaptcha",
+      "icon": "🧩",
+      "summary": "Checkbox, invisible execute, and real-page solving with vision fallback.",
+      "returns": "token, elapsed, method",
+      "needsSitekey": true,
+      "needsUrl": true,
+      "modes": [
+        {"name": "Checkbox (default)", "description": "Route-intercept widget + checkbox click + Mistral image grid"},
+        {"name": "Invisible", "description": "Set action: \"invisible\" — hcaptcha.execute(), zero interaction"},
+        {"name": "Real page", "description": "real_page: true with pre_actions and post_fetch"}
+      ],
+      "required": [
+        {"field": "type", "value": "hcaptcha"},
+        {"field": "sitekey", "value": "hCaptcha sitekey"},
+        {"field": "url", "value": "Target page URL"}
+      ],
+      "optional": [
+        {"field": "action", "description": "Literal \"invisible\" selects invisible path"},
+        {"field": "real_page", "description": "Solve on live site"},
+        {"field": "pre_actions / post_fetch", "description": "Page automation"},
+        {"field": "proxy", "description": "Residential proxy recommended"},
+        {"field": "timeout_s", "description": "Default 60"}
+      ],
+      "env": ["BROWSER_HEADLESS", "HCAPTCHA_GEOIP"],
+      "example": {
+        "type": "hcaptcha",
+        "sitekey": "10000000-ffff-ffff-ffff-000000000001",
+        "url": "https://target.com"
+      },
+      "tips": [
+        "Test key 10000000-ffff-ffff-ffff-000000000001 always passes (no challenge)",
+        "Image grids use numbered-cell Mistral classification (one call per page)",
+        "hCaptcha triggers challenges more aggressively than Turnstile — use proxy + headed mode",
+        "Requires common/apikey.txt for image challenges"
+      ]
+    },
+    {
+      "id": "cloudflare",
+      "name": "Cloudflare Clearance",
+      "icon": "☁️",
+      "summary": "Pass full-page interstitial and harvest cf_clearance cookie.",
+      "returns": "cf_clearance, cookies, user_agent, headers (no top-level token)",
+      "needsSitekey": false,
+      "needsUrl": true,
+      "modes": [
+        {"name": "Managed Challenge", "description": "Turnstile checkbox in iframe — needs headed browser"},
+        {"name": "JS Challenge", "description": "Checking your browser… — auto-resolves"}
+      ],
+      "required": [
+        {"field": "type", "value": "cloudflare"},
+        {"field": "url", "value": "CF-protected page URL"}
+      ],
+      "optional": [
+        {"field": "proxy", "description": "Strongly recommended — cookie bound to exit IP"},
+        {"field": "timeout_s", "description": "Cookie poll deadline (default 60)"},
+        {"field": "pre_actions / post_fetch", "description": "Steps after navigation"}
+      ],
+      "env": ["BROWSER_HEADLESS", "TURNSTILE_GEOIP"],
+      "example": {
+        "type": "cloudflare",
+        "url": "https://protected.example.com",
+        "proxy": "http://user:pass@ip:port",
+        "timeout_s": 60
+      },
+      "tips": [
+        "Replay: same proxy IP + exact user_agent + matching TLS (curl-impersonate or CloakBrowser)",
+        "Datacenter IPs often fail — use residential/mobile proxy",
+        "cf_clearance TTL ~15–30 min — re-solve on expiry",
+        "Do NOT use Turnstile stub for Managed Challenge — token gets code 1201"
+      ]
+    },
+    {
+      "id": "awswaf",
+      "name": "AWS WAF",
+      "icon": "🔶",
+      "summary": "Silent JS proof-of-work challenge → aws-waf-token cookie.",
+      "returns": "token, aws_waf_token, cookies, user_agent",
+      "needsSitekey": false,
+      "needsUrl": true,
+      "modes": [
+        {"name": "Silent challenge", "description": "Background token.js runs invisibly — supported"},
+        {"name": "Visual puzzle", "description": "NOT supported — will timeout if escalated"}
+      ],
+      "required": [
+        {"field": "type", "value": "awswaf"},
+        {"field": "url", "value": "AWS-WAF-protected page"}
+      ],
+      "optional": [
+        {"field": "proxy", "description": "Required for replayable token"},
+        {"field": "timeout_s", "description": "Default 60"},
+        {"field": "pre_actions / post_fetch", "description": "Post-navigation hooks"}
+      ],
+      "env": ["BROWSER_HEADLESS", "TURNSTILE_GEOIP"],
+      "example": {
+        "type": "awswaf",
+        "url": "https://protected.example.com",
+        "proxy": "http://user:pass@ip:port",
+        "timeout_s": 60
+      },
+      "tips": [
+        "Same replay contract as Cloudflare: IP + JA3 + User-Agent",
+        "CloudFront hard-blocks detected early — use residential proxy",
+        "Interactive visual puzzle not implemented"
+      ]
+    },
+    {
+      "id": "botguard",
+      "name": "Google BotGuard",
+      "icon": "🤖",
+      "summary": "Extract bgRequest token from Google OAuth sign-in flow.",
+      "returns": "token, cookies, cookie_header, replay_url, replay_body, user_agent",
+      "needsSitekey": false,
+      "needsUrl": false,
+      "modes": [
+        {"name": "Account lookup (MI613e)", "description": "email only — soft-signal token"},
+        {"name": "Password gate (B4hajb)", "description": "email + password — hard-gate token"}
+      ],
+      "required": [
+        {"field": "type", "value": "botguard"},
+        {"field": "email", "value": "Google account email to enter in sign-in flow"}
+      ],
+      "optional": [
+        {"field": "password", "description": "Drives to password RPC for B4hajb token"},
+        {"field": "url", "description": "Defaults to Google sign-in URL"},
+        {"field": "proxy", "description": "Token + cookies are session/IP-bound"},
+        {"field": "timeout_s", "description": "Default 90, solves take ~30–40s"}
+      ],
+      "env": ["BROWSER_HEADLESS"],
+      "example": {
+        "type": "botguard",
+        "email": "user@example.com",
+        "password": "optional-for-hard-gate-token"
+      },
+      "tips": [
+        "Token cannot be generated offline — browser run required once",
+        "Replay via curl_cffi with returned cookie_header + replay_url",
+        "Token is per-session — not reusable across accounts",
+        "~30–40 seconds per extraction"
+      ]
+    },
+    {
+      "id": "datadome",
+      "name": "DataDome",
+      "icon": "🍪",
+      "summary": "Harvest datadome clearance cookie via silent tags.js pass.",
+      "returns": "datadome_cookie, cookie_domain, user_agent",
+      "needsSitekey": false,
+      "needsUrl": true,
+      "modes": [
+        {"name": "Silent pass", "description": "tags.js POSTs jspl → api-js.datadome.co/js/ returns cookie"},
+        {"name": "Interactive captcha", "description": "Returns error if captcha-delivery URL — not yet supported"}
+      ],
+      "required": [
+        {"field": "type", "value": "datadome"},
+        {"field": "url", "value": "DataDome-fronted page/iframe that loads tags.js"}
+      ],
+      "optional": [
+        {"field": "referer", "description": "Framing referer for correct DataDome config"},
+        {"field": "proxy", "description": "Harvest and replay from same IP"},
+        {"field": "timeout_s", "description": "Default 60"}
+      ],
+      "env": ["BROWSER_HEADLESS"],
+      "example": {
+        "type": "datadome",
+        "url": "https://octocaptcha.com/datadome?origin_page=github_signup_redesign",
+        "referer": "https://github.com/",
+        "proxy": "http://user:pass@ip:port"
+      },
+      "tips": [
+        "Site-agnostic — caller supplies url + referer for each deployment",
+        "GitHub signup: octocaptcha URL + referer https://github.com/",
+        "Cookie is IP + UA bound — replay with same proxy and user_agent",
+        "Form scraping (CSRF, honeypot) is caller's job"
+      ]
+    },
+    {
+      "id": "perimeterx",
+      "name": "PerimeterX / HUMAN",
+      "icon": "👆",
+      "summary": "Press & Hold gate → _px3 clearance cookie via CDP mouse hold.",
+      "returns": "px3, cookies, cookie_header, user_agent, gate_reached",
+      "needsSitekey": false,
+      "needsUrl": false,
+      "modes": [
+        {"name": "outlook_signup (default)", "description": "Walks throwaway Outlook signup form to surface gate"},
+        {"name": "Direct URL", "description": "render_flow: null + url when gate renders on load"}
+      ],
+      "required": [
+        {"field": "type", "value": "perimeterx"}
+      ],
+      "optional": [
+        {"field": "render_flow", "description": "Named trigger from perimeterx/renderers/ (default outlook_signup)"},
+        {"field": "url", "description": "Target when gate renders on plain load"},
+        {"field": "proxy", "description": "Required — _px3 bound to exit IP"},
+        {"field": "timeout_s", "description": "Can take ~90s"}
+      ],
+      "env": ["BROWSER_HEADLESS"],
+      "example": {
+        "type": "perimeterx",
+        "render_flow": "outlook_signup",
+        "proxy": "http://user:pass@ip:port"
+      },
+      "tips": [
+        "Replay full cookie bundle (_px3 + _pxvid + _pxde + pxcts)",
+        "Gate is intermittent — solved:false + gate_reached:false is honest failure",
+        "Short TTL — replay within minutes from same proxy + UA",
+        "Add new sites via perimeterx/renderers/"
+      ]
+    },
+    {
+      "id": "akamai",
+      "name": "Akamai Bot Manager",
+      "icon": "🔒",
+      "summary": "Harvest validated _abck cookie via bmak telemetry sensor.",
+      "returns": "_abck, bm_sz, cookies, user_agent, sensor_fires",
+      "needsSitekey": false,
+      "needsUrl": true,
+      "modes": [
+        {"name": "bmak telemetry", "description": "Load page → sensor boots → real input → poll until _abck validated"}
+      ],
+      "required": [
+        {"field": "type", "value": "akamai"},
+        {"field": "url", "value": "Akamai-fronted page that arms bmak"}
+      ],
+      "optional": [
+        {"field": "proxy", "description": "Residential proxy recommended"},
+        {"field": "timeout_s", "description": "Default 90"},
+        {"field": "pre_actions / post_fetch", "description": "Gated resource fetch may need post_fetch"}
+      ],
+      "env": ["BROWSER_HEADLESS"],
+      "example": {
+        "type": "akamai",
+        "url": "https://www.akamai-fronted-site.com/",
+        "proxy": "http://user:pass@ip:port",
+        "timeout_s": 90
+      },
+      "tips": [
+        "Validated _abck drops ~-1~-1~-1~ sentinel — heuristic only, verify with real replay",
+        "Bound to IP + JA3 + User-Agent",
+        "Slow proxies may need longer timeout or cleaner residential IP",
+        "Browser mandatory — sensor embeds server nonce from bm_sz cookie"
+      ]
+    },
+    {
+      "id": "aliyun",
+      "name": "Aliyun Captcha 2.0",
+      "icon": "🧊",
+      "summary": "Slide-puzzle solver with YOLO gap detection + humanized drag.",
+      "returns": "token {sceneId, certifyId, deviceToken, data}, verify_code",
+      "needsSitekey": false,
+      "needsUrl": false,
+      "modes": [
+        {"name": "Self-hosted widget", "description": "Renders SDK on minimal local page — never visits target site"}
+      ],
+      "required": [
+        {"field": "type", "value": "aliyun"},
+        {"field": "scene_id", "value": "Target site's Captcha SceneId"},
+        {"field": "prefix", "value": "captcha-open endpoint prefix (e.g. 13lbkb5)"}
+      ],
+      "optional": [
+        {"field": "region", "description": "sgp (default) | cn | intl"},
+        {"field": "proxy", "description": "Verify from same IP if used"},
+        {"field": "timeout_s", "description": "Default 90"}
+      ],
+      "env": [],
+      "example": {
+        "type": "aliyun",
+        "scene_id": "1r7eif79x",
+        "prefix": "13lbkb5",
+        "region": "sgp"
+      },
+      "tips": [
+        "No sitekey or url — identity is scene_id + prefix from target page config",
+        "Requires onnxruntime + opencv-python-headless; best.onnx for YOLO gap detect",
+        "Token is one-time — replay immediately into VerifyCaptchaV3",
+        "T001 = pass, F001 = behavioral fail, F015 = wrong position",
+        "Drag uses overshoot-and-correct kinematics (not just position)"
+      ]
+    },
+    {
+      "id": "arkose",
+      "name": "Arkose FunCaptcha",
+      "icon": "🎮",
+      "summary": "Visual puzzle solver via ONNX classification + multi-wave pipeline.",
+      "returns": "token (fc_token), variant, waves_completed",
+      "needsSitekey": false,
+      "needsUrl": false,
+      "modes": [
+        {"name": "Multi-wave", "description": "Intercept gfct → predict → AES encrypt → POST /fc/ca/ up to max_waves"}
+      ],
+      "required": [
+        {"field": "type", "value": "arkose"},
+        {"field": "public_key", "value": "Arkose site public key"},
+        {"field": "page_url", "value": "Page that triggers Arkose widget"}
+      ],
+      "optional": [
+        {"field": "surl", "description": "Arkose service URL override (auto-detected from gfct)"},
+        {"field": "max_waves", "description": "Max rounds before give up (default 10)"},
+        {"field": "timeout_s", "description": "Default 120"},
+        {"field": "proxy", "description": "Per-request proxy"}
+      ],
+      "env": [],
+      "example": {
+        "type": "arkose",
+        "public_key": "A0DE7B75-1138-44F2-B132-ED188CEB66F3",
+        "page_url": "https://login.databricks.com/login",
+        "max_waves": 10
+      },
+      "tips": [
+        "24 ONNX models in arkose/models/ (~1.4GB) — unknown variants fail",
+        "Full solve ~45–60s for 7 waves",
+        "Requires onnxruntime for inference",
+        "Answers encrypted AES-CBC with session_token from gfct"
+      ]
+    }
+  ]
+}
